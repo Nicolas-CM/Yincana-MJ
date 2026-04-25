@@ -341,23 +341,38 @@ const DEFAULT_GROUPS = [
   {name:"Team Bears",emoji:"🐻"},{name:"Team Dragons",emoji:"🐉"},
 ];
 const EXTRA = ["🦋","🐸","🦄","🐙","🦖","🐊","🦈","🐘"];
+const GH_TOKEN_STORAGE_KEY = "campus_hunt_github_token";
 const GITHUB_UPLOAD_CONFIG = {
   owner: "Nicolas-CM",
   repo: "Yincana-MJ",
   branch: "main",
-  token: "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"
+  token: ""
 };
 
 let groups = DEFAULT_GROUPS.map(g => ({...g, steps: STEPS.map(() => ({done:false, photo:null}))}));
 let activeGroup = null, openStep = -1, pendingStep = null;
 
 function getGithubConfig(){
+  const storedToken = String(localStorage.getItem(GH_TOKEN_STORAGE_KEY) || "").trim();
   return {
-    token: String(GITHUB_UPLOAD_CONFIG.token || "").trim(),
+    token: String(GITHUB_UPLOAD_CONFIG.token || "").trim() || storedToken,
     owner: String(GITHUB_UPLOAD_CONFIG.owner || "").trim(),
     repo: String(GITHUB_UPLOAD_CONFIG.repo || "").trim(),
     branch: String(GITHUB_UPLOAD_CONFIG.branch || "main").trim() || "main"
   };
+}
+
+function ensureGithubToken(){
+  const existing = String(localStorage.getItem(GH_TOKEN_STORAGE_KEY) || "").trim();
+  if(existing) return existing;
+
+  const entered = prompt("Paste your GitHub token once (it will be saved only in this browser):");
+  const cleanToken = String(entered || "").trim();
+  if(!cleanToken){
+    throw new Error("Token is required to upload images.");
+  }
+  localStorage.setItem(GH_TOKEN_STORAGE_KEY, cleanToken);
+  return cleanToken;
 }
 
 function fileToBase64(file){
@@ -386,8 +401,12 @@ function safeName(input){
 
 async function uploadPhotoToGithub(file, stepIndex){
   const cfg = getGithubConfig();
-  if(!cfg.token || !cfg.owner || !cfg.repo || !cfg.branch){
-    throw new Error("Missing GitHub config in HTML. Fill GITHUB_UPLOAD_CONFIG first.");
+  if(!cfg.owner || !cfg.repo || !cfg.branch){
+    throw new Error("Missing owner/repo/branch in GITHUB_UPLOAD_CONFIG.");
+  }
+
+  if(!cfg.token){
+    cfg.token = ensureGithubToken();
   }
 
   const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
@@ -412,6 +431,9 @@ async function uploadPhotoToGithub(file, stepIndex){
 
   const data = await response.json();
   if(!response.ok){
+    if(response.status===401){
+      localStorage.removeItem(GH_TOKEN_STORAGE_KEY);
+    }
     const details = data && data.message ? data.message : "Unknown error";
     throw new Error(`GitHub upload failed: ${details}`);
   }
