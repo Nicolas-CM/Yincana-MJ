@@ -341,9 +341,84 @@ const DEFAULT_GROUPS = [
   {name:"Team Bears",emoji:"🐻"},{name:"Team Dragons",emoji:"🐉"},
 ];
 const EXTRA = ["🦋","🐸","🦄","🐙","🦖","🐊","🦈","🐘"];
+const GITHUB_UPLOAD_CONFIG = {
+  owner: "Nicolas-CM",
+  repo: "Yincana-MJ",
+  branch: "main",
+  token: "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"
+};
 
 let groups = DEFAULT_GROUPS.map(g => ({...g, steps: STEPS.map(() => ({done:false, photo:null}))}));
 let activeGroup = null, openStep = -1, pendingStep = null;
+
+function getGithubConfig(){
+  return {
+    token: String(GITHUB_UPLOAD_CONFIG.token || "").trim(),
+    owner: String(GITHUB_UPLOAD_CONFIG.owner || "").trim(),
+    repo: String(GITHUB_UPLOAD_CONFIG.repo || "").trim(),
+    branch: String(GITHUB_UPLOAD_CONFIG.branch || "main").trim() || "main"
+  };
+}
+
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const base64 = result.includes(",") ? result.split(",")[1] : "";
+      if(!base64){
+        reject(new Error("Could not convert file to base64."));
+        return;
+      }
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("Could not read file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function safeName(input){
+  return String(input || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "") || "team";
+}
+
+async function uploadPhotoToGithub(file, stepIndex){
+  const cfg = getGithubConfig();
+  if(!cfg.token || !cfg.owner || !cfg.repo || !cfg.branch){
+    throw new Error("Missing GitHub config in HTML. Fill GITHUB_UPLOAD_CONFIG first.");
+  }
+
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+  const team = activeGroup===null ? "team" : safeName(groups[activeGroup].name);
+  const timestamp = new Date().toISOString().replace(/[.:]/g, "-");
+  const path = `uploads/${team}/step-${stepIndex+1}-${timestamp}.${ext}`;
+  const content = await fileToBase64(file);
+
+  const response = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+    method: "PUT",
+    headers: {
+      "Accept": "application/vnd.github+json",
+      "Authorization": `Bearer ${cfg.token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      message: `Upload photo for step ${stepIndex+1} (${team})`,
+      content,
+      branch: cfg.branch
+    })
+  });
+
+  const data = await response.json();
+  if(!response.ok){
+    const details = data && data.message ? data.message : "Unknown error";
+    throw new Error(`GitHub upload failed: ${details}`);
+  }
+
+  const downloadUrl = data?.content?.download_url;
+  return downloadUrl || `https://raw.githubusercontent.com/${cfg.owner}/${cfg.repo}/${cfg.branch}/${path}`;
+}
 
 function doneCount(g){ return g.steps.filter(s=>s.done).length; }
 
@@ -438,12 +513,13 @@ function renderMap(){
         <div class="command-box">${step.command}</div>
         <div class="hint-box">${step.hint}</div>
         ${s.done
-          ? `<div class="done-line">✅ Well done! Great job!</div>`
+          ? `<div class="done-line">✅ Well done! Great job!</div>${s.photo?`<div class="hint-box">Saved in GitHub: <a href="${s.photo}" target="_blank" rel="noopener">open image</a></div>`:""}`
           : unlocked
             ? `<div class="photo-zone ${s.photo?"taken":""}" onclick="pickPhoto(${i})">
                 <span class="pz-icon">${s.photo?"🖼️":"📷"}</span>
-                <span class="pz-text">${s.photo?"Photo ready! Tap to change.":"Tap here to add your photo"}</span>
+                <span class="pz-text">${s.photo?"Photo uploaded! Tap to replace.":"Tap here to add your photo"}</span>
               </div>
+              ${s.photo?`<div class="hint-box">Saved in GitHub: <a href="${s.photo}" target="_blank" rel="noopener">open image</a></div>`:""}
               <button class="done-btn" onclick="completeStep(${i})" ${s.photo?"":"disabled"}>Done! Mark complete ✓</button>`
             : `<div class="locked-msg">Finish the last task first!</div>`
         }
@@ -460,11 +536,21 @@ function showFinal(){
 function toggleCh(i){ openStep = openStep===i ? -1 : i; renderMap(); }
 function pickPhoto(i){ pendingStep=i; document.getElementById("file-input").click(); }
 
-document.getElementById("file-input").addEventListener("change", function(e){
+document.getElementById("file-input").addEventListener("change", async function(e){
   if(pendingStep===null || activeGroup===null) return;
   const f = e.target.files[0]; if(!f) return;
-  groups[activeGroup].steps[pendingStep].photo = URL.createObjectURL(f);
-  this.value = ""; renderMap();
+  try {
+    alert("Uploading image to GitHub... please wait.");
+    const uploadedUrl = await uploadPhotoToGithub(f, pendingStep);
+    groups[activeGroup].steps[pendingStep].photo = uploadedUrl;
+    alert("Image uploaded to GitHub successfully.");
+  } catch (err) {
+    const message = err && err.message ? err.message : "Upload failed.";
+    alert(message);
+  } finally {
+    this.value = "";
+    renderMap();
+  }
 });
 
 function completeStep(i){
